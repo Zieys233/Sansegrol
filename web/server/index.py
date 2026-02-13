@@ -48,4 +48,11 @@ def js_file(filename):
     return send_from_directory(JS_DIR, filename)
 
 def run_server(debug=False):
-    app.run(host="localhost", port=8720, debug=debug)
+    # The parameter use_reloader must be set to False
+    # Otherwise, if debug is set to True, Flask will fail to find the `__main__` module and the subprocess will crash.
+    app.run(
+        host="localhost", 
+        port=8720, 
+        debug=debug, 
+        use_reloader=False
+    )
