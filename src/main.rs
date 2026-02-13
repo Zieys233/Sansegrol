@@ -5,6 +5,51 @@ use std::path::Path;
 use std::thread;
 
 
+fn get_sansegrol_from_args() -> Option<String> {
+    /*
+        Parses command-line arguments to find `--env` and returns its value.
+        If `--env` is followed by an argument (and it does not start with `-`), that argument is used as the value.
+        If `--env` appears alone, the current working directory is used as the value.
+        If `--env` is not found, returns `None`.
+        If getting the current working directory fails or the path contains invalid UTF-8, the program exits immediately.
+     */
+
+    let args: Vec<String> = env::args().collect();
+    let mut i = 0;
+    let mut result = None;
+
+    while i < args.len() {
+        if args[i] == "--env" {
+            // Check if next argument exists and is not another option (starts with '-')
+            if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                // Has argument, use it directly
+                result = Some(args[i + 1].clone());
+                i += 2;
+            } else {
+                // No argument, use current working directory
+                match env::current_dir() {
+                    Ok(cwd) => {
+                        if let Some(path_str) = cwd.to_str() {
+                            result = Some(path_str.to_string());
+                        } else {
+                            eprintln!("Error: current directory contains invalid UTF-8, cannot use as Sansegrol path.");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: failed to get current working directory: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    result
+}
+
 fn run_process(cmd_path: &Path, args: &[&str]) -> io::Result<i32> {
     let mut command_builder = Command::new(cmd_path);
     command_builder.args(args);
@@ -72,16 +117,28 @@ fn run_process(cmd_path: &Path, args: &[&str]) -> io::Result<i32> {
 }
 
 fn main() -> io::Result<()> {
-    let sansegrol_path = match env::var("Sansegrol") {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ => {
-            eprintln!("Error: 'Sansegrol' environment variable is not set or is empty.");
+    // First try to get Sansegrol path from command-line arguments
+    let sansegrol_path = if let Some(path_from_args) = get_sansegrol_from_args() {
+        if path_from_args.trim().is_empty() {
+            eprintln!("Error: --env argument provided an empty string, cannot use as Sansegrol path.");
             std::process::exit(1);
+        }
+        path_from_args
+    } else {
+        // If no --env, read from environment variable
+        match env::var("Sansegrol") {
+            Ok(s) if !s.trim().is_empty() => s,
+            _ => {
+                eprintln!("Error: 'Sansegrol' environment variable is not set or is empty, and no --env argument provided.");
+                std::process::exit(1);
+            }
         }
     };
 
-    // If Sansegrol points to an existing directory, run the embedded Python
-    // executable and the `src/sansegrol/main.py` script inside it.
+    // Set the environment variable so child processes can inherit it
+    env::set_var("Sansegrol", &sansegrol_path);
+
+    // Subsequent logic unchanged: use sansegrol_path to locate Python interpreter and script
     let p = Path::new(&sansegrol_path);
 
     if p.exists() && p.is_dir() {
@@ -98,7 +155,6 @@ fn main() -> io::Result<()> {
         }
 
         println!("Executing: {} {}", py_exe.display(), script.display());
-        // Run python executable with the script path as argument.
         let script_arg = script.to_str().unwrap_or_else(|| {
             eprintln!("Script path is not valid UTF-8");
             std::process::exit(1);
@@ -106,7 +162,7 @@ fn main() -> io::Result<()> {
         let exit_code = run_process(&py_exe, &[script_arg])?;
         std::process::exit(exit_code);
     } else {
-        eprintln!("Error: 'Sansegrol' environment variable does not point to a valid directory.");
+        eprintln!("Error: 'Sansegrol' environment variable does not point to a valid directory: {}", sansegrol_path);
         std::process::exit(-1);
     }
 }
