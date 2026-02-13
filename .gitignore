@@ -1,4 +1,11 @@
 /target
+
 /.browser_data
 /logs
-/sansegrol/script/__pycache__
+
+__pycache__/
+*.py[cod]
+**/__pycache__/
+*.pyc
+
+.vscode/
