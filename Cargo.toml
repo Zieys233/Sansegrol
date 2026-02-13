@@ -1,0 +1,6 @@
+[package]
+name = "sansegrol"
+version = "0.1.0-beta"
+edition = "2021"
+
+[dependencies]
