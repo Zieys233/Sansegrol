@@ -1,9 +1,11 @@
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, Child};
 use std::io::{self, Write, Read};
 use std::env;
 use std::path::Path;
 use std::thread;
-
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use ctrlc;
 
 fn get_sansegrol_from_args() -> Option<String> {
     /*
@@ -50,7 +52,9 @@ fn get_sansegrol_from_args() -> Option<String> {
     result
 }
 
-fn run_process(cmd_path: &Path, args: &[&str]) -> io::Result<i32> {
+/// Spawns the command and returns the child process along with handles to the
+/// threads that are forwarding stdout/stderr to the parent's console.
+fn run_process(cmd_path: &Path, args: &[&str]) -> io::Result<(Child, thread::JoinHandle<()>, thread::JoinHandle<()>)> {
     let mut command_builder = Command::new(cmd_path);
     command_builder.args(args);
 
@@ -109,11 +113,7 @@ fn run_process(cmd_path: &Path, args: &[&str]) -> io::Result<i32> {
         }
     });
 
-    let status = child.wait()?;
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
-
-    Ok(status.code().unwrap_or(1))
+    Ok((child, stdout_handle, stderr_handle))
 }
 
 fn main() -> io::Result<()> {
@@ -159,7 +159,54 @@ fn main() -> io::Result<()> {
             eprintln!("Script path is not valid UTF-8");
             std::process::exit(1);
         });
-        let exit_code = run_process(&py_exe, &[script_arg])?;
+
+        // Start the child process and obtain its handle and the output threads
+        let (child, stdout_handle, stderr_handle) = run_process(&py_exe, &[script_arg])?;
+
+        // Set up signal handling (Ctrl+C, SIGTERM, etc.)
+        let child_mutex = Arc::new(Mutex::new(Some(child)));
+        let term_requested = Arc::new(AtomicBool::new(false));
+
+        let term_requested_clone = term_requested.clone();
+        ctrlc::set_handler(move || {
+            term_requested_clone.store(true, Ordering::SeqCst);
+            // We only set the flag; actual killing is done in the main loop to avoid locking issues.
+        }).expect("Error setting Ctrl-C handler");
+
+        // Main loop: wait for the child to exit or handle termination requests
+        let exit_code = loop {
+            let mut child_guard = child_mutex.lock().unwrap();
+            if let Some(child) = child_guard.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Child has exited normally
+                        break status.code().unwrap_or(1);
+                    }
+                    Ok(None) => {
+                        // Child is still running
+                        if term_requested.load(Ordering::SeqCst) {
+                            // Termination signal received -> kill the child
+                            let _ = child.kill();
+                            // Continue looping; the child will exit soon and we'll catch it
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error waiting for child: {}", e);
+                        break 1;
+                    }
+                }
+            } else {
+                // Should never happen because we always keep Some until exit
+                break 1;
+            }
+            drop(child_guard); // Release lock before sleeping
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        // Ensure the output threads have finished (they will once the child is gone)
+        let _ = stdout_handle.join();
+        let _ = stderr_handle.join();
+
         std::process::exit(exit_code);
     } else {
         eprintln!("Error: 'Sansegrol' environment variable does not point to a valid directory: {}", sansegrol_path);
