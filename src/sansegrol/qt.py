@@ -1,22 +1,23 @@
-from PyQt5.QtCore import qInstallMessageHandler, QtMsgType
-from PyQt5.QtCore import QUrl, QStandardPaths, Qt
-from PyQt5.QtWidgets import (
-    QMainWindow, QShortcut, QDockWidget, QAction,
+from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+from PySide6.QtCore import QUrl, QStandardPaths, Qt
+from PySide6.QtWidgets import (
+    QMainWindow, QDockWidget,
     QFileDialog, QToolBar, QLabel, QPushButton,
     QWidget, QVBoxLayout, QHBoxLayout, QProgressBar, QFrame,
-    QApplication
+    QApplication, QStyle, QLineEdit, QTabWidget
 )
-from PyQt5.QtGui import QKeySequence, QIcon, QFont
-from PyQt5.QtWebEngineWidgets import (
-    QWebEngineView, QWebEngineProfile, QWebEnginePage,
-    QWebEngineSettings, QWebEngineDownloadItem
+from PySide6.QtGui import QAction, QShortcut, QKeySequence, QIcon, QFont, QDesktopServices
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import (
+    QWebEngineProfile,
+    QWebEnginePage,
+    QWebEngineSettings,
+    QWebEngineDownloadRequest
 )
-from PyQt5.QtGui import QDesktopServices
 
 from logger import get_logger, init_logging
 
 import os
-
 
 log_file = init_logging()
 logger = get_logger("custom_qt")
@@ -26,7 +27,7 @@ class DownloadItemWidget(QFrame):
     """
     Modern download item widget with flat design, rounded corners and icons.
     """
-    def __init__(self, download_item: QWebEngineDownloadItem, parent=None):
+    def __init__(self, download_item: QWebEngineDownloadRequest, parent=None):
         super().__init__(parent)
         self.download = download_item
 
@@ -147,7 +148,7 @@ class DownloadItemWidget(QFrame):
 
     def on_finished(self):
         """Handle download finished."""
-        if self.download.state() == QWebEngineDownloadItem.DownloadCompleted:
+        if self.download.state() == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
             self.progress_bar.setValue(100)
             self.status_label.setText("Completed")
             self.cancel_button.hide()
@@ -214,7 +215,7 @@ class DownloadManager(QDockWidget):
         self.layout.addLayout(title_layout)
 
         # Scroll area for download items
-        from PyQt5.QtWidgets import QScrollArea
+        from PySide6.QtWidgets import QScrollArea
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
@@ -261,7 +262,7 @@ class DownloadManager(QDockWidget):
             }
         """)
 
-    def add_download(self, download_item: QWebEngineDownloadItem):
+    def add_download(self, download_item: QWebEngineDownloadRequest):
         """Add a new download to the manager."""
         # Create widget
         item_widget = DownloadItemWidget(download_item)
@@ -289,7 +290,7 @@ class DownloadManager(QDockWidget):
         """Remove all completed downloads from the list."""
         to_remove = []
         for d, w in self.items:
-            if d.state() == QWebEngineDownloadItem.DownloadCompleted:
+            if d.state() == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
                 to_remove.append((d, w))
         for d, w in to_remove:
             w.deleteLater()
@@ -301,12 +302,10 @@ class DownloadManager(QDockWidget):
         event.ignore()
 
 
-# 以下为 CustomWebEnginePage, CustomWebEngineView, Window 等类，与之前版本相同，
-# 但已包含上述现代化下载管理器。为完整起见，保留所有代码。
-
 class CustomWebEnginePage(QWebEnginePage):
     """
-    Custom WebEngine page to handle link navigation and capture JavaScript console messages
+    Custom WebEngine page to handle link navigation, capture JavaScript console messages,
+    and manage HTML5 permissions.
     """
 
     def __init__(self, parent=None):
@@ -316,7 +315,7 @@ class CustomWebEnginePage(QWebEnginePage):
         self._popup_windows = []
         # Get JavaScript logger
         self._js_logger = get_logger("javascript")
-    
+
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         """
         Capture JavaScript console messages at the Qt level.
@@ -328,15 +327,15 @@ class CustomWebEnginePage(QWebEnginePage):
             1: "warning",   # WarningMessageLevel
             2: "error"      # ErrorMessageLevel
         }
-        
+
         log_level = level_map.get(level, "info")
-        
+
         # Format the message with source information
         if sourceID:
             full_message = f"[{sourceID}:{lineNumber}] {message}"
         else:
             full_message = message
-        
+
         # Log using the appropriate level
         if log_level == "error":
             self._js_logger.error(full_message)
@@ -344,18 +343,56 @@ class CustomWebEnginePage(QWebEnginePage):
             self._js_logger.warning(full_message)
         else:
             self._js_logger.info(full_message)
-    
+
+    def featurePermissionRequested(self, securityOrigin, feature):
+        """
+        Handle permission requests for HTML5 features (geolocation, notifications, media, etc.)
+        """
+        # Define which permissions to grant automatically
+        allowed_features = []
+        # Use hasattr to ensure compatibility with older Qt versions
+        if hasattr(QWebEnginePage, 'Geolocation'):
+            allowed_features.append(QWebEnginePage.Geolocation)
+        if hasattr(QWebEnginePage, 'Notifications'):
+            allowed_features.append(QWebEnginePage.Notifications)
+        if hasattr(QWebEnginePage, 'MediaAudioCapture'):
+            allowed_features.append(QWebEnginePage.MediaAudioCapture)
+        if hasattr(QWebEnginePage, 'MediaVideoCapture'):
+            allowed_features.append(QWebEnginePage.MediaVideoCapture)
+        if hasattr(QWebEnginePage, 'MediaAudioVideoCapture'):
+            allowed_features.append(QWebEnginePage.MediaAudioVideoCapture)
+        if hasattr(QWebEnginePage, 'DesktopVideoCapture'):
+            allowed_features.append(QWebEnginePage.DesktopVideoCapture)
+        if hasattr(QWebEnginePage, 'DesktopAudioVideoCapture'):
+            allowed_features.append(QWebEnginePage.DesktopAudioVideoCapture)
+
+        if feature in allowed_features:
+            self.setFeaturePermission(securityOrigin, feature, QWebEnginePage.PermissionGrantedByUser)
+        else:
+            # Deny other permissions (or you could prompt user)
+            self.setFeaturePermission(securityOrigin, feature, QWebEnginePage.PermissionDeniedByUser)
+
+        self._js_logger.info(f"Permission requested: {feature} -> {'granted' if feature in allowed_features else 'denied'}")
+
     def createWindow(self, type):
         """
         Handle new window creation (e.g., target="_blank")
+        Overridden to open new tabs instead of new windows.
         """
+        # Try to get the main window and create a new tab
+        view = self.parent()
+        if view is not None and isinstance(view, QWebEngineView):
+            main_window = view.window()
+            if main_window is not None and hasattr(main_window, 'create_new_tab'):
+                new_page = main_window.create_new_tab()
+                if new_page is not None:
+                    return new_page
 
-        # Create a new QWebEngineView to display the popup content
+        # Fallback to original behavior: open in a new native window
         new_view = QWebEngineView()
         new_page = CustomWebEnginePage(new_view)
         new_view.setPage(new_page)
 
-        # Open in a new native window
         new_window = QMainWindow()
         new_window.setCentralWidget(new_view)
         new_window.resize(800, 600)
@@ -371,23 +408,22 @@ class CustomWebEnginePage(QWebEnginePage):
             parent = self.parent() if hasattr(self, "parent") else None
             if parent is not None:
                 if not hasattr(parent, "_popup_windows"):
-                    parent._popup_windows = [] # type: ignore
-                parent._popup_windows.append((new_window, new_view, new_page)) # type: ignore
+                    parent._popup_windows = []  # type: ignore
+                parent._popup_windows.append((new_window, new_view, new_page))  # type: ignore
 
-        # Return the page for the new window
-        return new_view.page()
+        return new_page
 
 
 class CustomWebEngineView(QWebEngineView):
     """
     Custom QWebEngineView that adds an "Inspect element" action to the context menu
     """
-    
+
     def __init__(self, parent=None):
         super(CustomWebEngineView, self).__init__(parent)
 
-    def contextMenuEvent(self, event): # type: ignore
-        # use page"s standard context menu when available
+    def contextMenuEvent(self, event):  # type: ignore
+        # use page's standard context menu when available
         page = self.page()
         menu = None
         try:
@@ -396,18 +432,18 @@ class CustomWebEngineView(QWebEngineView):
         except Exception:
             menu = None
         if menu is None:
-            from PyQt5.QtWidgets import QMenu
+            from PySide6.QtWidgets import QMenu
             menu = QMenu(self)
         inspect_act = QAction("Inspect element", self)
 
-        # Call the parent window"s devtools open function and trigger the
+        # Call the parent window's devtools open function and trigger the
         # InspectElement action on the page
         def on_inspect():
             parent = self.window()
             if hasattr(parent, "_open_devtools"):
-                parent._open_devtools() # type: ignore
+                parent._open_devtools()  # type: ignore
             try:
-                act = self.page().action(QWebEnginePage.WebAction.InspectElement) # type: ignore
+                act = self.page().action(QWebEnginePage.WebAction.InspectElement)  # type: ignore
                 if act is not None:
                     act.trigger()
             except Exception:
@@ -419,93 +455,215 @@ class CustomWebEngineView(QWebEngineView):
 
 
 class Window(QMainWindow):
-    def __init__(self, title: str, geometrys: tuple, browser_data_path: str, html_content: str = None, icon_path: str = ""): # type: ignore
+    def __init__(self, title: str, geometrys: tuple, browser_data_path: str, html_content: str = None, icon_path: str = ""):  # type: ignore
         super(Window, self).__init__()
 
-        self.title     = title
+        self.title = title
         self.geometrys = geometrys
         self.browser_data_path = browser_data_path
         self.icon_path = icon_path
 
         self.setWindowTitle(title)
         self.setGeometry(self.geometrys[0], self.geometrys[1], self.geometrys[2], self.geometrys[3])
-        
+
         if self.icon_path:
             self.setWindowIcon(QIcon(self.icon_path))
 
-        # --- Create top toolbar ---
         self.toolbar = QToolBar("Main Toolbar")
         self.addToolBar(self.toolbar)
 
-        # Download button
+        # Donwload manager
         self.download_btn = QAction(QIcon(), "Downloads", self)
         self.download_btn.setToolTip("Show Downloads")
         self.download_btn.triggered.connect(self.toggle_download_manager)
         self.toolbar.addAction(self.download_btn)
 
-        # Download count label (optional)
         self.download_count_label = QLabel("0")
         self.toolbar.addWidget(self.download_count_label)
 
-        # --- Download Manager (initially hidden) ---
         self.download_manager = DownloadManager(self)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.download_manager)
-        self.download_manager.hide()  # start hidden
+        self.download_manager.hide()
 
-        # Keep track of active downloads count
         self.active_downloads = 0
 
-        # --- Browser setup (existing code) ---
-        # Obtain and log the default storage path
+        # Browser settings
         default_path = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         logger.info(f"Default cookie storage path: {default_path}")
 
-        # Create custom storage directory (must be set before creating any WebEngineView)
         os.makedirs(self.browser_data_path, exist_ok=True)
 
-        # Obtain the default profile and set the persistent storage path
         profile = QWebEngineProfile.defaultProfile()
         if profile is not None:
-            profile.setPersistentStoragePath(self.browser_data_path)  # set custom path
-            # Persistent cookie policy
-            if hasattr(QWebEngineProfile, "PersistSessionCookies"):
-                profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistSessionCookies) # type: ignore
-            else:
-                logger.warning("Warning: persistent cookie policy enum not found, skipping setting")
+            profile.setPersistentStoragePath(self.browser_data_path)
 
-            # Connect download signal
+            # Set persistent cookie policy.
+            if hasattr(profile, 'setPersistentCookiesPolicy'):
+                policy = None
+                if hasattr(QWebEngineProfile, 'PersistentSessionCookies'):
+                    policy = QWebEngineProfile.PersistentSessionCookies
+                elif hasattr(QWebEngineProfile, 'PersistentCookiesPolicy'):
+                    policy_enum = QWebEngineProfile.PersistentCookiesPolicy
+                    if hasattr(policy_enum, 'PersistentSessionCookies'):
+                        policy = policy_enum.PersistentSessionCookies
+                if policy is not None:
+                    profile.setPersistentCookiesPolicy(policy)
+                else:
+                    logger.warning("Could not find PersistentSessionCookies policy, using default")
+                    try:
+                        profile.setPersistentCookiesPolicy(1)
+                    except TypeError:
+                        logger.error("Failed to set persistent cookies policy")
+            else:
+                logger.warning("setPersistentCookiesPolicy not available, using default policy")
+
+            # Autoplay Policy
+            if hasattr(profile, 'setAttribute'):
+                autoplay_policy_attr = None
+                autoplay_policy_value = None
+                if hasattr(QWebEngineProfile, 'AutoplayPolicy'):
+                    autoplay_policy_attr = QWebEngineProfile.AutoplayPolicy
+                if hasattr(QWebEngineProfile, 'AutoplayAllow'):
+                    autoplay_policy_value = QWebEngineProfile.AutoplayAllow
+                elif hasattr(QWebEngineProfile, 'AutoplayPolicy'):
+                    try:
+                        autoplay_policy_value = QWebEngineProfile.AutoplayPolicy.AutoplayAllow
+                    except AttributeError:
+                        pass
+
+                if autoplay_policy_attr is not None and autoplay_policy_value is not None:
+                    try:
+                        profile.setAttribute(autoplay_policy_attr, autoplay_policy_value)
+                    except Exception as e:
+                        logger.warning(f"Failed to set autoplay policy: {e}")
+
+            modern_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+            profile.setHttpUserAgent(modern_ua)
             profile.downloadRequested.connect(self.handle_download)
 
         logger.info(f"Custom cookie storage path: {self.browser_data_path}")
-        
-        self.browser = CustomWebEngineView()
-        
-        # Create a custom page and assign it to the browser
-        self.custom_page = CustomWebEnginePage(self.browser)
-        self.browser.setPage(self.custom_page)
-        
-        # Enable required settings
-        self.enable_web_settings()
-        
-        # Wire up signals for URL change and load finished
-        self.browser.urlChanged.connect(self.on_url_changed)
-        self.browser.loadFinished.connect(self.on_load_finished)
 
-        # Only set HTML content if provided (for backwards compatibility)
+        # Create tab control.
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.tab_widget.currentChanged.connect(self.on_current_tab_changed)
+        self.setCentralWidget(self.tab_widget)
+
+        self.add_new_tab(None)
+
+        # Toolbar navigation buttons (act on current tab)
+        back_btn = QAction(self.style().standardIcon(QStyle.SP_ArrowBack), "", self)
+        back_btn.triggered.connect(lambda: self.current_browser().back())
+        self.toolbar.insertAction(self.download_btn, back_btn)
+
+        forward_btn = QAction(self.style().standardIcon(QStyle.SP_ArrowForward), "", self)
+        forward_btn.triggered.connect(lambda: self.current_browser().forward())
+        self.toolbar.insertAction(self.download_btn, forward_btn)
+
+        reload_btn = QAction(self.style().standardIcon(QStyle.SP_BrowserReload), "", self)
+        reload_btn.triggered.connect(lambda: self.current_browser().reload())
+        self.toolbar.insertAction(self.download_btn, reload_btn)
+
+        # Address bar input field
+        self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Enter URL or search...")
+        self.url_bar.returnPressed.connect(self.navigate_to_url)
+        self.toolbar.insertWidget(self.download_btn, self.url_bar)
+
         if html_content is not None:
-            self.browser.setHtml(html_content, QUrl("https://localhost/"))
-        
-        self.setCentralWidget(self.browser)
+            self.current_browser().setHtml(html_content, QUrl("https://localhost/"))
 
-        # DevTools window reference to prevent it from being garbage-collected
+        # Developer tools shortcut
         self._devtools = None
-        # F12 shortcut to toggle developer tools (best-effort)
         try:
             shortcut = QShortcut(QKeySequence("F12"), self)
             shortcut.activated.connect(self._toggle_devtools)
             self._devtools_shortcut = shortcut
         except Exception:
-            logger.warning("Note: unable to create F12 shortcut (QShortcut unsupported in this environment)")
+            logger.warning("Note: unable to create F12 shortcut")
+
+    def add_new_tab(self, url: QUrl):
+        """Create a new tab, optionally loading a specified URL."""
+        browser = CustomWebEngineView()
+        custom_page = CustomWebEnginePage(browser)
+        browser.setPage(custom_page)
+        self.enable_web_settings(browser)
+
+        browser.urlChanged.connect(self.on_browser_url_changed)
+        browser.titleChanged.connect(self.on_browser_title_changed)
+        browser.loadFinished.connect(self.on_browser_load_finished)
+
+        index = self.tab_widget.addTab(browser, "New Page")
+        self.tab_widget.setCurrentIndex(index)
+
+        if url is not None and not url.isEmpty():
+            browser.load(url)
+
+        return browser
+
+    def create_new_tab(self) -> CustomWebEnginePage:
+        """Method called by `CustomWebEnginePage.createWindow`: creates a new tab and returns its page."""
+        browser = self.add_new_tab()
+        return browser.page()
+
+    def current_browser(self) -> CustomWebEngineView:
+        """Get the current active browser widget (current tab)."""
+        return self.tab_widget.currentWidget()
+
+    def close_tab(self, index: int):
+        """Close the tab at the specified index, ensuring proper cleanup of the browser widget."""
+        widget = self.tab_widget.widget(index)
+        self.tab_widget.removeTab(index)
+        widget.deleteLater()
+
+        # If no tabs remain, add a new blank tab to prevent the UI from being empty
+        if self.tab_widget.count() == 0:
+            self.add_new_tab()
+
+    def on_current_tab_changed(self, index: int):
+        """When the user switches tabs, update the URL bar and window title to reflect the new active tab's URL."""
+        browser = self.tab_widget.widget(index)
+        if browser:
+            url = browser.url()
+            self.url_bar.setText(url.toString())
+            self.setWindowTitle(f"{self.title} - {url.toString()}")
+
+    def on_browser_url_changed(self, url: QUrl):
+        """Update the address bar and window title when the browser URL changes (only if it is the currently active tab)."""
+        browser = self.sender()
+        if browser == self.current_browser():
+            self.url_bar.setText(url.toString())
+            self.setWindowTitle(f"{self.title} - {url.toString()}")
+        logger.info(f"URL changed: {url.toString()}")
+
+    def on_browser_title_changed(self, title: str):
+        """Update tab title."""
+        browser = self.sender()
+        index = self.tab_widget.indexOf(browser)
+        if index != -1:
+            self.tab_widget.setTabText(index, title)
+
+    def on_browser_load_finished(self, success: bool):
+        """Log page load success or failure for the current tab."""
+        browser = self.sender()
+        if browser == self.current_browser():
+            if success:
+                logger.info("Page loaded successfully")
+            else:
+                logger.warning("Page load failed")
+
+    def navigate_to_url(self):
+        """When the user presses Enter in the address bar, navigate to the URL or search query."""
+        text = self.url_bar.text().strip()
+        if text:
+            url = QUrl.fromUserInput(text)
+            self.current_browser().load(url)
+
+    def load_url(self, url: QUrl):
+        """Programmatically load a URL in the current tab, with logging."""
+        logger.info(f"Loading URL: {url.toString()}")
+        self.current_browser().load(url)
 
     def toggle_download_manager(self):
         """Show or hide the download manager dock."""
@@ -554,59 +712,82 @@ class Window(QMainWindow):
             self.download_count_label.setText(str(self.active_downloads))
         download.finished.connect(on_finished)
 
-    def load_url(self, url: QUrl):
-        """Load a URL in the browser"""
-        logger.info(f"Loading URL: {url.toString()}")
-        self.browser.load(url)
-
-    def enable_web_settings(self):
+    def enable_web_settings(self, browser: CustomWebEngineView):
         """
-        Enable required web settings
+        Enable required web settings for full HTML5 support on a specific browser.
         """
+        settings = browser.settings()
 
-        settings = self.browser.settings()
-        # Enable JavaScript
-        settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True) # type: ignore
-        # Allow JavaScript to open new windows
-        settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True) # type: ignore
-        # Allow JavaScript to access the clipboard
-        settings.setAttribute(QWebEngineSettings.JavascriptCanAccessClipboard, True) # type: ignore
-        # Enable local storage
-        settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True) # type: ignore
-        # Enable plugins
-        settings.setAttribute(QWebEngineSettings.PluginsEnabled, True) # type: ignore
-        # Try to enable developer tools (attribute name varies between PyQt5 versions)
-        if hasattr(QWebEngineSettings, "DeveloperExtrasEnabled"):
-            settings.setAttribute(QWebEngineSettings.DeveloperExtrasEnabled, True) # type: ignore
-        elif hasattr(QWebEngineSettings, "WebAttribute") and hasattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled"):
-            settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True) # type: ignore
+        # Basic settings
+        settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True)
+        settings.setAttribute(QWebEngineSettings.JavascriptCanAccessClipboard, True)
+        settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
+
+        # Fullscreen support (for video, etc.)
+        if hasattr(QWebEngineSettings, 'FullScreenSupportEnabled'):
+            settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+
+        # WebGL and hardware acceleration
+        if hasattr(QWebEngineSettings, 'WebGLEnabled'):
+            settings.setAttribute(QWebEngineSettings.WebGLEnabled, True)
+            
+        if hasattr(QWebEngineSettings, 'Accelerated2dCanvasEnabled'):
+            settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, True)
+
+        # Auto-load images (usually on by default)
+        if hasattr(QWebEngineSettings, 'AutoLoadImages'):
+            settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
+
+        # Allow autoplay without user gesture (if supported)
+        if hasattr(QWebEngineSettings, 'PlaybackRequiresUserGesture'):
+            settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)
+        
+        # Developer tools (for debugging)
+        if hasattr(QWebEngineSettings, 'DeveloperExtrasEnabled'):
+            settings.setAttribute(QWebEngineSettings.DeveloperExtrasEnabled, True)
+        elif hasattr(QWebEngineSettings, 'WebAttribute') and hasattr(QWebEngineSettings.WebAttribute, 'DeveloperExtrasEnabled'):
+            settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
         else:
-            logger.warning("Current PyQt5 version does not support DeveloperExtrasEnabled setting, skipping")
-    
-    def on_url_changed(self, url):
-        """
-        Handle URL changes
-        """
+            logger.warning("Current PySide6 version does not support DeveloperExtrasEnabled setting, skipping")
 
-        logger.info(f"URL changed: {url.toString()}")
-        self.setWindowTitle(f"{self.title} - {url.toString()}")
-    
-    def on_load_finished(self, success):
-        """
-        Handle page load finished
-        """
+        # Enable media features if available (for HTML5 audio/video)
+        if hasattr(QWebEngineSettings, 'MediaEnabled'):
+            settings.setAttribute(QWebEngineSettings.MediaEnabled, True)
 
-        if success:
-            logger.info("Page loaded successfully")
-        else:
-            logger.warning("Page load failed")
+        # Security settings - disable mixed content (if supported)
+        if hasattr(QWebEngineSettings, 'AllowRunningInsecureContent'):
+            settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, False)
+
+        # Disable features that may cause issues or are not needed
+        if hasattr(QWebEngineSettings, 'HyperlinkAuditingEnabled'):
+            settings.setAttribute(QWebEngineSettings.HyperlinkAuditingEnabled, False)
+
+        # Disable scroll animator for smoother scrolling (if supported)
+        if hasattr(QWebEngineSettings, 'ScrollAnimatorEnabled'):
+            settings.setAttribute(QWebEngineSettings.ScrollAnimatorEnabled, False)
+
+        # Enable media source extensions for advanced media streaming (if supported)
+        if hasattr(QWebEngineSettings, 'MediaSourceEnabled'):
+            settings.setAttribute(QWebEngineSettings.MediaSourceEnabled, True)
+
+        # Hide scrollbars for a cleaner look (optional, may cause issues on some sites)
+        if hasattr(QWebEngineSettings, 'HideScrollbars'):
+            settings.setAttribute(QWebEngineSettings.HideScrollbars, True)
+
+        # Enable encrypted media extensions for DRM-protected content (if supported)
+        if hasattr(QWebEngineSettings, 'EncryptedMediaEnabled'):
+            settings.setAttribute(QWebEngineSettings.EncryptedMediaEnabled, True)
 
     def _open_devtools(self):
         """
         Open a standalone DevTools window if supported by the platform
         """
-
-        page = self.browser.page()
+        browser = self.current_browser()
+        if not browser:
+            return
+        page = browser.page()
         if page is None:
             logger.warning("Notice: current page is not available, cannot open DevTools")
             return
@@ -618,7 +799,7 @@ class Window(QMainWindow):
                 dev = QWebEngineView()
                 dev.setWindowTitle("DevTools")
                 dev.resize(900, 700)
-                    # Register the devtools page
+                # Register the devtools page
                 page.setDevToolsPage(dev.page())
                 # Embed devtools as a dock widget
                 if self._devtools is not None and isinstance(self._devtools, QDockWidget):
@@ -628,8 +809,8 @@ class Window(QMainWindow):
                         pass
                 dock = QDockWidget("DevTools", self)
                 dock.setWidget(dev)
-                dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea) # type: ignore
-                self.addDockWidget(Qt.BottomDockWidgetArea, dock) # type: ignore
+                dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea)  # type: ignore
+                self.addDockWidget(Qt.BottomDockWidgetArea, dock)  # type: ignore
                 dock.show()
                 self._devtools = dock
                 return
@@ -646,7 +827,7 @@ class Window(QMainWindow):
         except Exception:
             pass
 
-        logger.error("Unable to open DevTools: current Qt/PyQt version does not support DevTools API")
+        logger.error("Unable to open DevTools: current Qt/PySide version does not support DevTools API")
 
     def _toggle_devtools(self):
         """Toggle DevTools window visibility"""
@@ -671,7 +852,7 @@ def qt_message_handler(mode, context, message):
         elif mode == QtMsgType.QtFatalMsg:
             # use fault if available
             if hasattr(qlogger, "fault"):
-                qlogger.fault(str(message)) # type: ignore
+                qlogger.fault(str(message))  # type: ignore
             else:
                 qlogger.error(str(message))
         else:

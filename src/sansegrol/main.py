@@ -1,7 +1,6 @@
-from logger import init_logging, get_logger, get_multiprocess_queue, setup_child_process_logger, cleanup_logging
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QUrl
 from qt import Window, install_qt_handler
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QUrl
 
 import sys
 import os
@@ -11,6 +10,7 @@ import time
 from pathlib import Path
 import json
 
+from logger import init_logging, get_logger, get_multiprocess_queue, setup_child_process_logger, cleanup_logging
 
 log_file = init_logging()
 logger = get_logger("main")
@@ -18,11 +18,22 @@ logger = get_logger("main")
 install_qt_handler()
 
 
-def run_flask_server(flask_server_path: str, debug: bool = False):
+os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = '--autoplay-policy=no-user-gesture-required'
+
+
+def run_flask_server(flask_server_path: str, host: str, port: int, app_variable: str, debug: bool = False):
     """
     Run Flask server in a separate process.
-    Configures logging to use the parent process"s queue.
+    Configures logging to use the parent process's queue.
+    
+    Args:
+        flask_server_path: Path to the Flask server module
+        debug: Whether to run Flask in debug mode
+        host: Host to bind the Flask server to
+        port: Port to bind the Flask server to
+        app_variable: Name of the Flask app variable in the module
     """
+
     # Configure child process logger to use queue
     queue_obj = get_multiprocess_queue()
     if queue_obj:
@@ -54,15 +65,45 @@ def run_flask_server(flask_server_path: str, debug: bool = False):
         flask_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(flask_module)
         
-        # Run the server
-        if hasattr(flask_module, "run_server"):
-            flask_module.run_server(debug=debug)
-        else:
+        # Check if the module has the specified Flask app variable
+        if not hasattr(flask_module, app_variable):
             flask_logger = get_logger("flask")
-            flask_logger.error("run_server function not found in Flask module")
+            flask_logger.fatal(f"Flask app variable '{app_variable}' not found in module")
+            exit(-1)
+        
+        # Get the Flask app instance
+        flask_app = getattr(flask_module, app_variable)
+        
+        # Define and inject run_server function if not already present
+        if not hasattr(flask_module, 'run_server'):
+            def run_server(host: str, port: int, debug: bool = False):
+                # The parameter use_reloader must be set to False
+                # Otherwise, if debug is set to True, Flask will fail to find the `__main__` module and the subprocess will crash.
+                flask_app.run(
+                    host=host, 
+                    port=port, 
+                    debug=debug, 
+                    use_reloader=False
+                )
+            
+            # Inject the function into the module
+            flask_module.run_server = run_server
+            flask_logger = get_logger("flask")
+            flask_logger.info(f"Auto-injected run_server() function into Flask module (using app variable: {app_variable}, host={host}, port={port})")
+
+            # Run the server using the injected or existing run_server function
+            logger.info(f"Starting Flask server on {host}:{port} with debug={debug}")
+            flask_module.run_server(debug=debug, host=host, port=port)
+        else:
+            # If the module already has run_server, we might want to wrap it to ensure it uses our settings
+            flask_logger = get_logger("flask")
+            flask_logger.info("Flask module already has run_server() function, using existing one")
+        
     except Exception as e:
         flask_logger = get_logger("flask")
         flask_logger.error(f"Error running Flask server: {e}")
+        import traceback
+        flask_logger.error(traceback.format_exc())
 
 def get_configure(sansegrol_path: str) -> dict:
     """Get configuration dictionary"""
@@ -91,18 +132,19 @@ if __name__ == "__main__":
     browser_data_path = os.path.join(sansegrol_path, ".browser_data").replace("\\", "/")  # Normalize path for Windows
     configure         = get_configure(sansegrol_path)
 
-    porject_name      = configure.get("project_name", "Sansegrol")
-    version           = configure.get("version", "1.0.0")
-    qt_title          = configure.get("qt_settings", {}).get("title", "Sansegrol")
-    qt_author         = configure.get("qt_settings", {}).get("author", "Sansegron")
-    qt_show_maximium  = configure.get("qt_settings", {}).get("show_maximum", True)
-    defualt_width     = configure.get("qt_settings", {}).get("default_width", 1280)
-    defualt_height    = configure.get("qt_settings", {}).get("default_height", 720)
-    qt_icon_path      = Path(sansegrol_path) / configure.get("qt_settings", {}).get("icon_path", "assets/icons/icon128.png")
-    flask_host        = configure.get("flask_settings", {}).get("host", "http://localhost")
-    flask_port        = configure.get("flask_settings", {}).get("port", 8720)
-    flask_debug       = configure.get("flask_settings", {}).get("debug", False)
-    flask_server_path = configure.get("flask_settings", {}).get("server_path", "web/server/index.py")
+    porject_name       = configure.get("project_name", "Sansegrol")
+    version            = configure.get("version", "1.0.0")
+    qt_title           = configure.get("qt_settings", {}).get("title", "Sansegrol")
+    qt_author          = configure.get("qt_settings", {}).get("author", "Sansegron")
+    qt_show_maximium   = configure.get("qt_settings", {}).get("show_maximum", True)
+    defualt_width      = configure.get("qt_settings", {}).get("default_width", 1280)
+    defualt_height     = configure.get("qt_settings", {}).get("default_height", 720)
+    qt_icon_path       = Path(sansegrol_path) / configure.get("qt_settings", {}).get("icon_path", "assets/icons/icon128.png")
+    flask_host         = configure.get("flask_settings", {}).get("host", "http://localhost")
+    flask_port         = configure.get("flask_settings", {}).get("port", 8720)
+    flask_debug        = configure.get("flask_settings", {}).get("debug", False)
+    flask_server_path  = configure.get("flask_settings", {}).get("server_path", "web/server/index.py")
+    flask_app_variable = configure.get("flask_settings", {}).get("app_variable", "app")
 
     logger.info(f"Working directory: {sansegrol_path}")
     logger.info(f"Browser data path: {browser_data_path}")
@@ -117,7 +159,17 @@ if __name__ == "__main__":
         logger.warning(f"Icon path does not exist or is not set")
 
     # Start Flask server in a separate process
-    flask_process = multiprocessing.Process(target=run_flask_server, args=(flask_server_path, flask_debug), daemon=True)
+    flask_process = multiprocessing.Process(
+        target=run_flask_server, 
+        args=(
+            flask_server_path,
+            flask_host,
+            flask_port,
+            flask_app_variable,
+            flask_debug
+        ), 
+        daemon=True
+    )
     flask_process.start()
     logger.info(f"Flask server started on {flask_host}:{flask_port}")
 
@@ -136,10 +188,11 @@ if __name__ == "__main__":
         icon_path=qt_icon_path
     )
     # Load the Flask server URL
-    window.load_url(QUrl(f"{flask_host}:{flask_port}/"))
+    window.load_url(QUrl(f"http://{flask_host}:{flask_port}/"))
+    
     if qt_show_maximium:
         window.showMaximized()
     else:
         window.show()
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

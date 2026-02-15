@@ -1,6 +1,6 @@
 {
     "project_name": "Sansegrol",
-    "version": "0.1.0-beta",
+    "version": "0.1.1-beta",
     "qt_settings": {
         "title": "Sansegrol",
         "author": "Sansegron",
@@ -10,9 +10,10 @@
         "icon_path": "assets/icons/icon128.png"
     },
     "flask_settings": {
-        "host": "http://localhost",
+        "host": "localhost",
         "port": 8720,
         "debug": false,
-        "flask_server_path": "web/server/index.py"
+        "flask_server_path": "web/server/index.py",
+        "app_variable": "app"
     }
 }
