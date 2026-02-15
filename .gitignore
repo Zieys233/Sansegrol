@@ -7,6 +7,6 @@ __pycache__/
 *.py[cod]
 **/__pycache__/
 *.pyc
-./python-3.8.9-embed-amd64/Lib/site-packages/*
+/python-3.8.9-embed-amd64/Lib/site-packages/*
 
 .vscode/
